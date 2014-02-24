@@ -1,0 +1,380 @@
+
+Exploratory LendingClub Analysis
+========================
+
+------
+
+### Load libraries
+
+```{r}
+library(maps)
+library(Hmisc)
+library(ggplot2)
+library(RColorBrewer)
+```
+
+------
+
+## Processing
+
+Download the data, read the data in and save the raw data as an RDA file
+
+```{r loadData,cache=TRUE}
+download.file("https://spark-public.s3.amazonaws.com/dataanalysis/loansData.csv",destfile="./data/lendingclub.csv",method="curl")
+dateDownloaded <- date()
+dateDownloaded
+lendingRaw <- read.csv('../data/lendingclub.csv')
+lendRaw <- read.csv('../data/lendingclub.csv')
+save(lendingRaw,dateDownloaded,file="../data/lendingRaw.rda")
+```
+
+
+### Look at the data set
+
+```{r, dependson="loadData"}
+head(lendingRaw)
+summary(lendingRaw)
+sapply(lendingRaw[1,],class)
+```
+
+### Find out about missing values
+```{r, dependson="loadData"}
+sum(is.na(lendingRaw))
+good <- complete.cases(lendingRaw)
+lendingRaw <- lendingRaw[good,]
+sum(is.na(lendingRaw))
+class(lendingRaw)
+```
+
+------
+
+## Exploratory analysis
+
+### Make some univariate plots/summaries
+
+```{r, dependson="loadData"}
+hist(lendingRaw$Amount.Requested,breaks=100)
+quantile(lendingRaw$Amount.Requested)
+lendingRaw$Interest.Value <- gsub("%", "", lendingRaw$Interest.Rate)
+lendingRaw$Interest.Value <- as.numeric(as.character(lendingRaw$Interest.Value))
+hist(as.numeric(lendingRaw$Interest.Value),breaks=100)
+lendingRaw$Interest.Rate.Numeric <- as.numeric(sub("%", "", lendingRaw$Interest.Rate))
+```
+
+### Make some univariate tables
+```{r, dependson="loadData"}
+table(lendingRaw$Home.Ownership)
+table(lendingRaw$Open.CREDIT.Lines)
+a <- data.frame(table(lendingRaw$State))
+length(unique(lendingRaw$Loan.Length))
+unique(lendingRaw$Loan.Length)
+length(unique(lendingRaw$Inquiries.in.the.Last.6.Months))
+plot(lendingRaw$FICO.Range)
+```
+
+### Plot Income versus Interest Rate Value
+```{r, dependson="loadData"}
+plot(lendingRaw$Monthly.Income,lendingRaw$Interest.Value,pch=19)
+```
+
+### Looks weird, let's try a transform - need to add one to avoid log(0)
+```{r, dependson="loadData"}
+summary(lendingRaw$Monthly.Income)
+summary(log10(lendingRaw$Monthly.Income))
+summary(log10(lendingRaw$Monthly.Income+1))
+lendingRaw$log10Monthly.Income <- log10(lendingRaw$Monthly.Income + 1)
+```
+
+### Plot w/transform
+```{r, dependson="loadData"}
+plot(lendingRaw$log10Monthly.Income,lendingRaw$Interest.Value,pch=19)
+```
+
+# create numeric values for these variables: DtoIRatio, 
+```{r}
+lendingRaw$DtoIValue <- gsub("%", "", lendingRaw$Debt.To.Income.Ratio)
+lendingRaw$DtoIValue <- as.numeric(as.character(lendingRaw$DtoIValue))
+```
+
+### Add a numeric version of FICO range 
+```{r}
+f <- as.character(lendingRaw$FICO.Range)
+lendingRaw$FICO.Range.Value <- gsub("-[0-9][0-9][0-9]","",lendingRaw$FICO.Range)
+lendingRaw$FICO.Range.Value <- as.numeric(lendingRaw$FICO.Range.Value)
+lendingRaw$FICO.Range.Value.Log10 <- log10(lendingRaw$FICO.Range.Value + 10)
+plot(lendingRaw$Interest.Value,lendingRaw$FICO.Range.Value)
+plot(lendingRaw$FICO.Range.Value,lendingRaw$Interest.Value)
+```
+
+### Try some boxplots
+```{r}
+boxplot(lendingRaw$FICO.Range.Value ~ lendingRaw$Interest.Value)
+```
+data looks too dense to use this plot, but we'll see if we need it later. We can modify by binning with the cut2 function if needed.
+
+```{r}
+boxplot(lendingRaw$log10Monthly.Income ~ lendingRaw$Interest.Value)
+```
+This is very informative - income does not really relate to Interest Value!
+
+### Modeling 
+Make some statistical plots and try regression on the points
+
+### Fit a basic model relating FICO.Range to Interest Rate
+```{r}
+plot(lendingRaw$Interest.Value, lendingRaw$FICO.Range.Value)
+lm1 <- lm(lendingRaw$Interest.Value ~ lendingRaw$FICO.Range.Value)
+summary(lm1)
+```
+This Adjusted R-squared value is much lower than I expected. Is that b/c of the spread of the interest value and the spread of the FICO range?
+
+Plot the residuals vs the fitted values for your model. How does looking at this plot determine your plan to use that model and find the statistics?
+```{r}
+lm2 <- lm(lendingRaw$Interest.Value ~ lendingRaw$FICO.Range.Value + lendingRaw$Monthly.Income + lendingRaw$Amount.Requested)
+par(mfrow=c(1,3))
+plot(lendingRaw$Interest.Value, lm2$residuals)
+```
+
+
+# create a dataframe with numerics that we can apply dimensionless reduction to:
+```{r}
+requested <- lendingRaw$Amount.Requested
+funded <- lendingRaw$Amount.Funded.By.Investors
+income <- lendingRaw$Monthly.Income
+openCredit <- lendingRaw$Open.CREDIT.Lines
+revolvCredit <- lendingRaw$Revolving.CREDIT.Balance
+inquiries <- lendingRaw$Inquiries.in.the.Last.6.Months
+FICOvalue <- lendingRaw$FICO.Range.Value
+log10FICOvalue <- lendingRaw$FICO.Range.Value.Log10 
+interest <- lendingRaw$Interest.Rate.Numeric 
+DtoI <- lendingRaw$DtoIValue
+
+useFrame <- data.frame(requested, funded, income, openCredit, revolvCredit, FICOvalue, log10FICOvalue, interest, DtoI)
+useFrame2 <- data.frame(interest,FICOvalue)
+# check to make sure the data frame has only numeric values (and integer?)
+sapply(useFrame[1,], class)
+```
+
+### Apply Correlation Function!
+
+# Recode the numerics so that high is "desired" in all cases
+# I believe DtoI is the only one where this is necessary
+```{r}
+useFrame$DtoI <- max(useFrame$DtoI) - useFrame$DtoI
+```
+
+### examine numerical values of the between pairs events correlations by applying the cor function to every variable 
+```{r}
+round(cor(useFrame[,]), 2)
+plot(useFrame[,])
+```
+Notice that the plots don't show much b/c there are too many values, but the correlations incidate the amount requested & amount funded have positive correlations with interest rate. Next, the Debt to Income ratio shows a neg correlation. How to interpret?
+
+### focus on amount requested 
+```{r}
+par(mfrow=c(1,1))
+plot(useFrame$requested ~ useFrame$interest)
+lm3 <- lm(useFrame$requested ~ useFrame$interest)
+summary(lm3)
+```
+Is this model trying to compare the VALUES of amount requested to the VALUES of interest? That's crazy! --> no, the p-values are showing how well the model fits the data (fits the interest rate data and fits the requested data)
+
+### Let's try using the AIC criterion
+```{r}
+g <- glm(useFrame$interest ~ useFrame$requested)
+step(g)
+summary(g) # AIC = 13946
+
+h <- glm(useFrame$interest ~ useFrame$funded)
+summary(h) # AIC = 13937
+
+i <- glm(useFrame$interest ~ useFrame$FICOvalue)
+summary(i) # AIC = 12491
+
+j <- glm(useFrame$interest ~ useFrame$income)
+summary(j) # AIC = 14237
+
+k <- glm(useFrame$interest ~ useFrame$openCredit)
+summary(k) # AIC = 14217
+
+l <- glm(useFrame$interest ~ useFrame$revolvCredit)
+summary(l) # AIC = 14228
+
+m <- glm(useFrame$interest ~ useFrame$DtoI)
+summary(m) # AIC = 14162
+```
+
+### Let's try looking at AIC for the five remaining factor variables: 
+Loan.Length, Loan.Purpose, Home.Ownership, State, Employment.Length
+```{r}
+n <- glm(lendingRaw$Interest.Value ~ lendingRaw$Loan.Length)
+summary(n) # AIC = 13744
+
+o <- glm(lendingRaw$Interest.Value ~ lendingRaw$Loan.Purpose)
+summary(o) # AIC = 14166
+
+p <- glm(lendingRaw$Interest.Value ~ lendingRaw$Home.Ownership)
+summary(p) # AIC = 14224
+
+q <- glm(lendingRaw$Interest.Value ~ lendingRaw$State)
+summary(q) # AIC = 14271
+
+r <- glm(lendingRaw$Interest.Value ~ lendingRaw$Employment.Length)
+summary(r) # AIC = 14247
+```
+
+### now let's try combining variables. I'll have to combine the useFrame and lendingRaw dataframes...
+```{r}
+lendingFinal <- useFrame[,]
+lendingFinal[,10:30] <- lendingRaw[,]
+dim(lendingFinal)
+s <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value)
+summary(s) # AIC = 12491 (just as before combining frames. good!)
+```
+
+# Now let's try combining variables. Can I combine continuous variables with factor variables?
+Loan.Length, Loan.Purpose, Home.Ownership, State, Employment.Length
+```{r}
+t <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Loan.Length)
+summary(t) # AIC = 11313
+
+u <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Loan.Purpose)
+summary(u) # AIC = 12469
+
+v <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Home.Ownership)
+summary(v) # AIC = 12490
+
+w <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$State)
+summary(w) # AIC = 12526
+
+x <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Employment.Length)
+summary(x) # AIC = 12485
+
+y <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value +
+           lendingFinal$State + lendingFinal$Employment.Length + 
+           lendingFinal$Home.Ownership + lendingFinal$Loan.Purpose +  
+           lendingFinal$Loan.Length)
+summary(y) # AIC = 11357
+```
+
+### Let's try looking at AIC by combining FICO with other continuous variables
+[1] "requested"      "funded"         "income"         "openCredit"    
+[5] "revolvCredit"   "FICOvalue"      "log10FICOvalue" "interest"      
+[9] "DtoI"    
+```{r}
+aa <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$requested)
+summary(aa) # AIC = 11567
+
+bb <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$funded)
+summary(bb) # AIC = 11577
+
+cc <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$income)
+summary(cc) # AIC = 12442
+
+dd <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$openCredit)
+summary(dd) # AIC = 12489
+
+ee <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$revolvCredit)
+summary(ee) # AIC = 12473
+
+ff <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$FICOvalue)
+summary(ff) # AIC = 12491
+
+gg <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$DtoI)
+summary(gg) # AIC = 12491
+```
+Note the best combo for the continuous variables is FICO range and requested. 
+
+The best combo for the factor variables is FICO range and loan length.
+
+### Let's see if both loan length and funds requested add to FICO range for best model.
+```{r}
+hh <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Loan.Length + lendingFinal$requested)
+summary(hh) # AIC = 10826
+```
+
+### Let's see if adding another variable would help. Try DtoI.
+```{r}
+ii <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value + lendingFinal$Loan.Length + lendingFinal$requested + lendingFinal$DtoI)
+summary(ii) # AIC = 10825 
+```
+Note that this is not much better than without DtoI. Let's go with model hh.
+
+
+```{r}
+mypar <- function(a=1,b=1,brewer.n=8,brewer.name="Dark2",...){
+ par(mar=c(2.5,2.5,1.6,1.1),mgp=c(1.5,.5,0))
+ par(mfrow=c(a,b),...)
+ palette(brewer.pal(brewer.n,brewer.name))
+}
+```
+
+
+### Figure making
+```{r}
+par(mfrow=c(1,3))
+
+plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, pch=19, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(a)", side=3, line=2)
+
+plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, col=lendingFinal$Loan.Length, pch=19, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(b)", side=3, line=2)
+
+legend(700, 23, legend=c("36 Months", "60 Months"), col=c("black", "red"), pch=c(19,19), cex=c(1.0, 1.0))
+
+requestedCut <- cut2(lendingFinal$requested, g=3)
+
+tmp <- as.character(requestedCut)
+tmp[tmp=="[ 1000, 8100)"]=0
+tmp[tmp=="[ 8100,15000)"]=1
+tmp[tmp=="[15000,35000]"]=2
+tmp=as.numeric(tmp)
+pchtype=15+tmp
+
+
+# plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, col=requestedCut, pch=15, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+ plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, col=requestedCut, pch=pchtype, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(c)", side=3, line=2)
+
+legend(700, 23, legend=c("$1000 to $8100", "$8100 to $15000", "$15000 to $35000"), col=c("black", "red", "green"), pch=c(15,16,17), cex=c(1.0,1.0,1.0))
+```
+
+## Set size of axes
+```{r}
+cx = 1.9
+```
+
+**pdf**
+```{r}
+pdf(file="Proj1Final.pdf", height=4, width=12)
+# must be 1:2 ratio for two panel plot
+par(mfrow=c(1,3))
+
+plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, pch=19, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(a)", side=3, line=2, cex=cx)
+
+plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, col=lendingFinal$Loan.Length, pch=19, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(b)", side=3, line=2, cex=cx)
+legend(750, 25, legend=c("36 Months", "60 Months"), col=c("black", "red"), pch=c(19,19), cex=c(1.5, 1.5))
+
+plot(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value, col=requestedCut, pch=pchtype, xlab="FICO range (lower limit)", ylab="Interest Rate (%)",cex.axis=cx,cex.lab=cx)
+
+mtext(text="(c)", side=3, line=2, cex=cx)
+
+legend(725, 25, legend=c("$1000 to $8100", "$8100 to $15000", "$15000 to $35000"), col=c("black", "red", "green"), pch=c(15,16,17), cex=c(1.5,1.5,1.5))
+
+dev.off()
+```
+
+```{r}
+modelA <- glm(lendingFinal$Interest.Value ~ lendingFinal$FICO.Range.Value)
+summary(modelA)
+
+
+```
